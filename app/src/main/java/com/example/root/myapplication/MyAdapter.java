@@ -1,41 +1,48 @@
 package com.example.root.myapplication;
 
+import android.support.annotation.NonNull;
 import android.support.v7.widget.RecyclerView;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.TextView;
 
-import com.google.gson.Gson;
+import com.example.root.myapplication.model.data.Market;
+import com.example.root.myapplication.model.helper.MarketGetHelper;
 
-import java.io.IOException;
-import java.util.ArrayList;
+import java.math.RoundingMode;
+import java.text.DecimalFormat;
+import java.text.NumberFormat;
+import java.util.List;
 
+import butterknife.BindView;
+import butterknife.ButterKnife;
 import butterknife.OnClick;
 import io.reactivex.Observable;
 import io.reactivex.android.schedulers.AndroidSchedulers;
 import io.reactivex.subjects.PublishSubject;
 import io.reactivex.subjects.Subject;
-import okhttp3.Call;
-import okhttp3.Callback;
-import okhttp3.Headers;
-import okhttp3.HttpUrl;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-import okhttp3.ResponseBody;
 
 
 public class MyAdapter extends RecyclerView.Adapter<MyAdapter.ViewHolder> {
 
     //All methods in this adapter are required for a bare minimum recyclerview adapter
     private int listItemLayout;
-    private ArrayList<Item> itemList;
+    private List<Market> itemList;
+    private MarketGetHelper marketGetHelper;
+    private Subject<Boolean> mSubjectOnRefreshDone = PublishSubject.create();
+
     // Constructor of the class
-    public MyAdapter(int layoutId, ArrayList<Item> itemList) {
+    public MyAdapter(int layoutId, MarketGetHelper marketGetHelper) {
         listItemLayout = layoutId;
-        this.itemList = itemList;
+        this.marketGetHelper = marketGetHelper;
+        this.marketGetHelper.getObservableRefreshMarkets()
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(this::onDataChange);
+
+        marketGetHelper.refreshMarkets();
     }
 
     // get the size of the list
@@ -44,90 +51,72 @@ public class MyAdapter extends RecyclerView.Adapter<MyAdapter.ViewHolder> {
         return itemList == null ? 0 : itemList.size();
     }
 
-
     // specify the row layout file and click for each row
     @Override
-    public ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+    public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
         View view = LayoutInflater.from(parent.getContext()).inflate(listItemLayout, parent, false);
-        ViewHolder myViewHolder = new ViewHolder(view);
-        myViewHolder.getObservableOnClickItem()
-                .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(this::onDataChange);
-        return myViewHolder;
+        return new ViewHolder(view);
     }
 
-    private void onDataChange(ArrayList<Item> list) {
+    public Observable<Boolean> getObservableRefreshDone() {
+        return mSubjectOnRefreshDone;
+    }
+
+    private void onDataChange(List<Market> list) {
         this.itemList = list;
         notifyDataSetChanged();
+        mSubjectOnRefreshDone.onNext(false);
     }
+
+    private static String round(double num) {
+        NumberFormat nf = new DecimalFormat();
+        nf.setRoundingMode(RoundingMode.HALF_UP);
+        nf.setMaximumFractionDigits(3);
+
+        try {
+            return nf.format(num);
+        } catch (Exception e) {
+            return "0.00";
+        }
+    }
+
     // load data in each row element
     @Override
-    public void onBindViewHolder(final ViewHolder holder, final int listPosition) {
-        TextView item = holder.item;
-        item.setText(itemList.get(listPosition).getName());
+    public void onBindViewHolder(@NonNull final ViewHolder holder, final int listPosition) {
+        Market item = itemList.get(listPosition);
+        holder.bind(item);
     }
 
     // Static inner class to initialize the views of rows
-    static class ViewHolder extends RecyclerView.ViewHolder implements View.OnClickListener {
-        private Subject<ArrayList<Item>> mSubjectOnClickItem = PublishSubject.create();
-        public TextView item;
-        public ViewHolder(View itemView) {
+    static class ViewHolder extends RecyclerView.ViewHolder {
+        @BindView(R.id.icon) ImageView icon;
+        @BindView(R.id.last) TextView last;
+        @BindView(R.id.vol) TextView vol;
+        @BindView(R.id.high) TextView high;
+        @BindView(R.id.low) TextView low;
+
+        private ViewHolder(View itemView) {
             super(itemView);
-            itemView.setOnClickListener(this);
-            item = (TextView) itemView.findViewById(R.id.row_item);
+            ButterKnife.bind(this, itemView);
         }
 
-        Observable<ArrayList<Item>> getObservableOnClickItem() {
-            return mSubjectOnClickItem;
+        private void bind(Market item) {
+            if (item.isBtc()) {
+                icon.setImageResource(R.drawable.icon_btc);
+            } else if (item.isEth()) {
+                icon.setImageResource(R.drawable.icon_eth);
+            } else {
+                icon.setImageResource(R.drawable.icon_mith);
+            }
+            last.setText(round(item.getLast()));
+            vol.setText(round(item.getVol()));
+            high.setText(round(item.getHigh()));
+            low.setText(round(item.getLow()));
         }
 
-        @Override
-        public void onClick(View view) {
-            OkHttpClient client = new OkHttpClient();
-            HttpUrl.Builder urlBuilder = HttpUrl.parse("https://api.kraken.com/0/public/Ticker").newBuilder();
-            urlBuilder.addQueryParameter("pair", "ETHUSD");
-            String url = urlBuilder.build().toString();
-            Request request = new Request.Builder()
-                    .url(url)
-                    .build();
-
-            client.newCall(request).enqueue(new Callback() {
-                @Override public void onFailure(Call call, IOException e) {
-                    e.printStackTrace();
-                }
-
-                @Override public void onResponse(Call call, Response response) throws IOException {
-                    try (ResponseBody responseBody = response.body()) {
-                        if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
-/*
-                        Headers responseHeaders = response.headers();
-                        for (int i = 0, size = responseHeaders.size(); i < size; i++) {
-                            Log.d("onClick", responseHeaders.name(i) + ": " + responseHeaders.value(i));
-                        }
-*/
-                        Gson gson = new Gson();
-                        String resp = responseBody.string();
-                        ResponseObj responsceObj = gson.fromJson(resp, ResponseObj.class);
-                        ArrayList<Item> newList = new ArrayList<>();
-                        for (String s : responsceObj.getA()) {
-                            newList.add(new Item(s));
-                        }
-                        for (String s : responsceObj.getB()) {
-                            newList.add(new Item(s));
-                        }
-                        for (String s : responsceObj.getC()) {
-                            newList.add(new Item(s));
-                        }
-                        for (String s : responsceObj.getV()) {
-                            newList.add(new Item(s));
-                        }
-                        mSubjectOnClickItem.onNext(newList);
-                        Log.d("onClickkk", resp);
-                    }
-                }
-            });
-
-            Log.d("onclick", "onClick " + getLayoutPosition() + " " + item.getText());
+        @OnClick()
+        void onClickItem() {
+            Log.d("onclick", "onClick " + getLayoutPosition() + " " + last.getText());
         }
     }
 }
